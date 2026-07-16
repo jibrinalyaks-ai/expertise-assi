@@ -4,8 +4,8 @@
   "description": "ASASUL ILM ACADEMY GOMBE - School Management Portal",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "npx prisma generate && npx prisma db push",
+    "start": "npx prisma db push && node server.js",
+    "build": "npx prisma generate",
     "postinstall": "npx prisma generate"
   },
   "dependencies": {
