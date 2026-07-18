@@ -303,22 +303,6 @@ async function loadClassesForSelect(sid){
   }catch(e){populateClassSelect(sid);}
 }
 
-// ==================== FETCH ALL STUDENTS (FOR LOGIN) ====================
-async function fetchAllStudents(){
-  if(allStudentsCache) return allStudentsCache;
-  try{
-    // Try without auth first (public endpoint won't work, so try with empty token)
-    const res=await fetch(API+'/api/students',{headers:{'Content-Type':'application/json'}});
-    if(res.ok){allStudentsCache=await res.json();return allStudentsCache;}
-  }catch(e){}
-  // Fallback: try with current token if available
-  try{
-    allStudentsCache=await api('/api/students');
-    return allStudentsCache;
-  }catch(e){}
-  return [];
-}
-
 // ==================== LOGIN ====================
 function showLogin(type){
   document.querySelectorAll('.login-grid .card').forEach(c=>c.classList.add('hidden'));
@@ -349,14 +333,8 @@ async function doLogin(type){
     document.getElementById('slSpinner').classList.remove('hidden');
     if(!regNo||!password){showToast('Reg number and password required','error');document.getElementById('slSpinner').classList.add('hidden');return;}
     try{
-      // Fetch students via the public admission check style - direct fetch without auth
-      const students=await fetchAllStudents();
-      if(!students.length){document.getElementById('studentError').style.display='block';showToast('Cannot load students. Try again.','error');document.getElementById('slSpinner').classList.add('hidden');return;}
-      const student=students.find(s=>s.rollNo===regNo);
-      if(!student){document.getElementById('studentError').style.display='block';showToast('Invalid registration number','error');document.getElementById('slSpinner').classList.add('hidden');return;}
-      const email=student.user.email;
-      // Now login with email + password
-      const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email,password})});
+      // Send reg number as the email field – server now handles both
+      const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email: regNo, password})});
       token=data.token;currentUser=data.user;allStudentsCache=null;
       localStorage.setItem('assi_token',token);localStorage.setItem('assi_user',JSON.stringify(currentUser));
       showMain();resetLogoutTimer();
@@ -399,12 +377,26 @@ async function checkApplicantStatus(){
   document.getElementById('appChkSpinner').classList.remove('hidden');
   try{
     const d=await api('/api/admissions/check?email='+encodeURIComponent(email)+'&ref='+encodeURIComponent(ref));
-    let msg='Status: <strong>'+d.status.toUpperCase()+'</strong>';
-    if(d.status==='accepted') msg+='<br>🎉 Admitted! Login as student.';
-    else if(d.status==='rejected') msg+='<br>Sorry, not accepted.';
-    else msg+='<br>Under review.';
+    let msg='';
+    if(d.status==='accepted'){
+      msg=`
+        <div style="background:#D1FAE5;padding:12px;border-radius:8px;margin-top:8px;">
+          <strong>✅ ACCEPTED!</strong><br>
+          🎉 Congratulations!<br><br>
+          <strong>📋 Login Details:</strong><br>
+          🔢 Reg No: <strong>${d.student?.rollNo || 'N/A'}</strong><br>
+          🔑 Password: <strong style="color:#EF4444;">password</strong><br>
+          📚 Class: ${d.classFor || 'N/A'}<br><br>
+          <small>Use your Registration Number to login as a Student. Change password after first login.</small>
+        </div>
+      `;
+    }else if(d.status==='rejected'){
+      msg='<div style="background:#FEE2E2;padding:12px;border-radius:8px;margin-top:8px;">❌ Not accepted. Please contact the school.</div>';
+    }else{
+      msg='<div style="background:#FEF3C7;padding:12px;border-radius:8px;margin-top:8px;">⏳ Under review. Check back later.</div>';
+    }
     document.getElementById('applicantResult').innerHTML=msg;
-  }catch(e){document.getElementById('applicantResult').innerHTML='<span style="color:var(--danger);">Not found</span>';}
+  }catch(e){document.getElementById('applicantResult').innerHTML='<span style="color:var(--danger);">❌ Not found. Check your Reference Number.</span>';}
   document.getElementById('appChkSpinner').classList.add('hidden');
 }
 
@@ -492,12 +484,37 @@ async function loadDashboard(){
   else if(r==='STUDENT'){try{const st=await api('/api/students');const me=st[0];if(!me){el.innerHTML='<p>Complete profile.</p>';return;}const gr=await api('/api/grades?studentId='+me.id);const subs=await api('/api/subjects?studentId='+me.id);const subList=subs[0]?.subjects||[];let rel=false;try{const rd=await api('/api/results/check?class='+encodeURIComponent(me.class)+'&term=Term 1');rel=rd.released;}catch(e){}const att=await api('/api/attendance?studentId='+me.id);const p=att.filter(a=>a.present).length,t=att.length||1;el.innerHTML=`<div class="stat-grid"><div class="stat-card"><div class="stat-value">${me.class}</div><div class="stat-label">Class</div></div><div class="stat-card"><div class="stat-value">${Math.round((p/t)*100)}%</div><div class="stat-label">Attendance</div></div></div><div class="card mt-2"><h4>Subjects</h4><p>${subList.length?subList.join(', '):'None'}</p></div>${rel?`<div class="card mt-2"><h4>Results</h4><div id="studentResultsDisplay">${renderResultTable(gr)}</div></div>`:'<p class="text-muted mt-2">Results not released.</p>'}${!me.bioFilled?'<div class="mandatory-banner">⚠️ <a href="#" onclick="switchTab(\'myprofile\')">Complete Bio Data</a></div>':''}`;}catch(e){el.innerHTML='<p class="text-muted">Error.</p>';}}
 }
 
+/* ==================== RESULT TABLE WITH OVERALL TOTAL ==================== */
 function renderResultTable(grades){
-  if(!grades.length)return'<p class="text-muted">No grades.</p>';
-  let h='<div class="grade-row header"><span>Subject</span><span>CA1</span><span>CA2</span><span>Exam</span><span>Total</span><span>Att%</span></div>';
-  grades.forEach(g=>{const t=(g.ca1||0)+(g.ca2||0)+(g.exam||0);h+=`<div class="grade-row"><span>${g.subject}</span><span>${g.ca1||0}</span><span>${g.ca2||0}</span><span>${g.exam||0}</span><span><strong>${t}</strong></span><span>${g.attendance||100}%${t>0?' ✅':''}</span></div>`;});
-  return h+'<button class="btn btn-gold btn-sm mt-2" onclick="printResult()"><i class="fas fa-print"></i> Print / Download</button>';
+  if(!grades.length) return '<p class="text-muted">No grades.</p>';
+  
+  let h = '<div class="grade-row header"><span>Subject</span><span>CA1</span><span>CA2</span><span>Exam</span><span>Total</span><span>Att%</span></div>';
+  let grandTotal = 0;
+  
+  grades.forEach(g => {
+    const t = (g.ca1 || 0) + (g.ca2 || 0) + (g.exam || 0);
+    grandTotal += t;
+    h += `<div class="grade-row">
+      <span>${g.subject}</span>
+      <span>${g.ca1 || 0}</span>
+      <span>${g.ca2 || 0}</span>
+      <span>${g.exam || 0}</span>
+      <span><strong>${t}</strong></span>
+      <span>${g.attendance || 100}%${t > 0 ? ' ✅' : ''}</span>
+    </div>`;
+  });
+
+  const avg = (grandTotal / grades.length).toFixed(1);
+  h += `<div class="grade-row" style="font-weight:700; background:#F8FAFC; border-top:2px solid var(--primary);">
+    <span>📊 OVERALL</span>
+    <span></span><span></span><span></span>
+    <span><strong>${grandTotal}</strong></span>
+    <span>Avg: ${avg}</span>
+  </div>`;
+
+  return h + '<button class="btn btn-gold btn-sm mt-2" onclick="printResult()"><i class="fas fa-print"></i> Print / Download</button>';
 }
+
 function printResult(){const c=document.getElementById('studentResultsDisplay');if(!c)return;const w=window.open('','_blank');w.document.write(`<html><head><title>Result - ASSI</title><style>body{font-family:sans-serif;padding:20px;}.grade-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid #ddd;}.header{font-weight:700;}</style></head><body><h2>ASASUL ILM ACADEMY GOMBE</h2>${c.innerHTML.replace(/<button.*?button>/g,'')}</body></html>`);w.document.close();setTimeout(()=>w.print(),500);}
 async function downloadStudentResult(){await switchTab('dashboard');setTimeout(()=>{const c=document.getElementById('studentResultsDisplay');if(c)printResult();},800);}
 
@@ -539,8 +556,52 @@ async function loadSubjects(){try{const st=await api('/api/students');const regs
 async function saveSubjectRegistration(){const sid=document.getElementById('subjStudentSel')?.value;const subs=Array.from(document.querySelectorAll('.subjCheck:checked')).map(cb=>cb.value);if(!sid){showToast('Select student','error');return;}document.getElementById('subjSaveSpinner')?.classList.remove('hidden');try{await api('/api/subjects',{method:'POST',body:JSON.stringify({studentId:sid,subjects:subs})});showToast('Saved!','success');await loadSubjects();}catch(e){showToast('Error','error');}document.getElementById('subjSaveSpinner')?.classList.add('hidden');}
 
 // ==================== ADMISSIONS ====================
-async function loadAdmissions(){try{const a=await api('/api/admissions');const c=document.getElementById('admissionList');if(!a.length){c.innerHTML='<p class="text-muted">No applications.</p>';return;}c.innerHTML=a.map(a=>`<div class="list-item"><div><strong>${a.childName}</strong> (${a.classFor})<br><span class="text-muted">Ref: ${a.ref}</span></div><div class="flex"><span class="badge ${a.status==='accepted'?'badge-success':a.status==='rejected'?'badge-danger':'badge-warning'}">${a.status}</span>${a.status==='pending'?`<button class="btn btn-success btn-sm" onclick="handleAdmission('${a.id}','accepted')">✓</button><button class="btn btn-danger btn-sm" onclick="handleAdmission('${a.id}','rejected')">✕</button>`:''}<button class="btn btn-danger btn-sm" onclick="deleteAdmission('${a.id}')"><i class="fas fa-trash"></i></button></div></div>`).join('');}catch(e){showToast('Error','error');}}
-async function handleAdmission(id,st){try{await api('/api/admissions/'+id,{method:'PUT',body:JSON.stringify({status:st})});showToast(st+'!','success');await loadAdmissions();allStudentsCache=null;await loadStudents();}catch(e){showToast('Error','error');}}
+async function loadAdmissions(){
+  try{
+    const a=await api('/api/admissions');
+    const c=document.getElementById('admissionList');
+    if(!a.length){c.innerHTML='<p class="text-muted">No applications.</p>';return;}
+    c.innerHTML=a.map(ad=>`
+      <div class="list-item" style="flex-direction:column;align-items:flex-start;">
+        <div style="width:100%;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+          <div>
+            <strong>${ad.childName}</strong> (${ad.classFor})<br>
+            <span class="text-muted">Ref: ${ad.ref}</span>
+            ${ad.status==='accepted' && ad.student ? `
+              <br><span style="color:var(--success);font-weight:600;">
+                🔢 Reg No: ${ad.student.rollNo} | 🔑 Pass: password
+              </span>
+            ` : ''}
+          </div>
+          <div class="flex">
+            <span class="badge ${ad.status==='accepted'?'badge-success':ad.status==='rejected'?'badge-danger':'badge-warning'}">${ad.status}</span>
+            ${ad.status==='pending'?`<button class="btn btn-success btn-sm" onclick="handleAdmission('${ad.id}','accepted')"><i class="fas fa-check"></i> Accept</button><button class="btn btn-danger btn-sm" onclick="handleAdmission('${ad.id}','rejected')"><i class="fas fa-times"></i> Reject</button>`:''}
+            <button class="btn btn-danger btn-sm" onclick="deleteAdmission('${ad.id}')"><i class="fas fa-trash"></i></button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }catch(e){showToast('Error loading admissions','error');}
+}
+
+async function handleAdmission(id, status){
+  if(status==='accepted'){
+    if(!confirm('Accept this application? The applicant will receive login details.')) return;
+  }
+  try{
+    const result=await api('/api/admissions/'+id,{method:'PUT',body:JSON.stringify({status})});
+    if(status==='accepted' && result.student){
+      alert(`🎉 APPLICATION ACCEPTED!\n\nStudent Login Details:\n👤 Name: ${result.student.name}\n🔢 Reg No: ${result.student.rollNo}\n🔑 Password: password\n📧 Email: ${result.student.email}\n📚 Class: ${result.student.class}\n\nSave these details!`);
+      showToast(`✅ Accepted! Reg No: ${result.student.rollNo}`,'success');
+    }else if(status==='rejected'){
+      showToast('❌ Application rejected.','success');
+    }
+    await loadAdmissions();
+    allStudentsCache=null;
+    await loadStudents();
+    await loadUsers();
+  }catch(e){showToast('Error: '+e.message,'error');}
+}
 async function deleteAdmission(id){if(!confirm('Delete?'))return;try{await api('/api/admissions/'+id,{method:'DELETE'});showToast('Deleted','success');await loadAdmissions();}catch(e){showToast('Error','error');}}
 
 // ==================== ANNOUNCEMENTS & CALENDAR ====================
